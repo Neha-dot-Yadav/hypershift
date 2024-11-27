@@ -269,6 +269,12 @@ func (options *DestroyInfraOptions) DestroyInfra(ctx context.Context, logger log
 	}
 
 	if !skipPowerVs {
+		// destroy DHCP server first, to not rely on PowerVs Cloud Instance recursive delete
+		if err = destroyPowerVSDHCP(ctx, logger, infra, session); err != nil {
+			errL = append(errL, fmt.Errorf("error destroying DHCP: %w", err))
+			logger.Error(err, "error destroying DHCP")
+		}
+
 		if err = destroyPowerVsCloudInstance(ctx, logger, options, infra, powerVsCloudInstanceID, session); err != nil {
 			errL = append(errL, fmt.Errorf("error destroying powervs cloud instance: %w", err))
 			logger.Error(err, "error destroying powervs cloud instance")
@@ -369,6 +375,56 @@ func deleteSecrets(name, namespace, cloudInstanceID string, accountID string, re
 	}
 
 	return nil
+}
+
+// destroyPowerVSDHCP destroys the dhcp server
+func destroyPowerVSDHCP(ctx context.Context, logger logr.Logger, infra *Infra, session *ibmpisession.IBMPISession) error {
+	logger.Info("Destroying PowerVS DHCP ...")
+	client := instance.NewIBMPIDhcpClient(ctx, session, infra.CloudInstanceID)
+
+	dhcpServers, err := client.GetAll()
+	if err != nil {
+		return err
+	}
+
+	if dhcpServers == nil || len(dhcpServers) < 1 {
+		return fmt.Errorf("no dhcp servers found to delete in PowerVS cloud instance")
+	}
+
+	dhcpServerID := *dhcpServers[0].ID
+	logger.Info("Deleting existing DHCP server with ID: %s in PowerVS cloud instance", dhcpServerID)
+
+	err = client.Delete(dhcpServerID)
+	if err != nil {
+		return err
+	}
+
+	f := func() (bool, error) {
+		dhcpInstance, err := client.Get(dhcpServerID)
+		if err != nil {
+			if err = isNotRetryableError(err, timeoutErrorKeywords); err == nil {
+				return false, nil
+			}
+			errMsg := err.Error()
+			// when instance becomes does not exist, infra destroy can proceed
+			if strings.Contains(errMsg, "pvm-instance does not exist") {
+				err = nil
+				return true, nil
+			}
+			return false, err
+		}
+		if dhcpInstance == nil {
+			return false, fmt.Errorf("dhcpInstance is nil")
+		}
+		logger.Info("Waiting for DHCP server with ID: %s to get destroyed", dhcpServerID)
+		if *dhcpInstance.Status == dhcpInstanceShutOffState || *dhcpInstance.Status == dhcpServiceErrorState {
+			return true, nil
+		}
+		return false, nil
+
+	}
+
+	return wait.PollImmediate(pollingInterval, dhcpServerDeletionTimeout, f)
 }
 
 // destroyPowerVsCloudInstance destroying powervs cloud instance
