@@ -3,6 +3,7 @@ package nodepool
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/openshift/hypershift/support/releaseinfo"
@@ -52,7 +53,7 @@ func ibmPowerVSMachineTemplateSpec(hcluster *hyperv1.HostedCluster, nodePool *hy
 	if err != nil {
 		return nil, fmt.Errorf("couldn't discover a PowerVS Image for release image: %w", err)
 	}
-	powerVSBootImage := coreOSPowerVSImage.Release
+	powerVSBootImage := strings.ReplaceAll(coreOSPowerVSImage.Release, ".", "-")
 
 	var image *capipowervs.IBMPowerVSResourceReference
 	var imageRef *corev1.LocalObjectReference
@@ -142,7 +143,7 @@ func (r *NodePoolReconciler) setPowerVSconditions(ctx context.Context, nodePool 
 		})
 		return fmt.Errorf("couldn't discover a PowerVS Image for release image: %w", err)
 	}
-	powervsBootImage := coreOSPowerVSImage.Release
+	powervsBootImage := strings.ReplaceAll(coreOSPowerVSImage.Release, ".", "-")
 	SetStatusCondition(&nodePool.Status.Conditions, hyperv1.NodePoolCondition{
 		Type:               hyperv1.NodePoolValidPlatformImageType,
 		Status:             corev1.ConditionTrue,
@@ -154,7 +155,8 @@ func (r *NodePoolReconciler) setPowerVSconditions(ctx context.Context, nodePool 
 	// CoreOS images in the IBM Cloud are hosted in the IBM Cloud Object Storage for PowerVS platform, these images
 	// needs to be imported into the PowerVS service instance needed for the machines. IBMPowerVSImage is the spec
 	// controlled by the CAPIBM to import these images and used in the machine deployments.
-	ibmPowerVSImage := IBMPowerVSImage(controlPlaneNamespace, coreOSPowerVSImage.Release)
+	ibmPowerVSImageName := strings.ReplaceAll(coreOSPowerVSImage.Release, ".", "-")
+	ibmPowerVSImage := IBMPowerVSImage(controlPlaneNamespace, ibmPowerVSImageName)
 	if result, err := r.CreateOrUpdate(ctx, r.Client, ibmPowerVSImage, func() error {
 		return reconcileIBMPowerVSImage(ibmPowerVSImage, hcluster, nodePool, hcluster.Spec.InfraID, powervsImageRegion, coreOSPowerVSImage)
 	}); err != nil {
